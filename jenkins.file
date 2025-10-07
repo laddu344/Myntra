@@ -64,6 +64,7 @@ pipeline {
                     sh """
                         # Install eksctl if not installed
                         if ! command -v eksctl >/dev/null 2>&1; then
+                            echo "Installing eksctl..."
                             curl --silent --location "https://github.com/weaveworks/eksctl/releases/latest/download/eksctl_$(uname -s)_amd64.tar.gz" | tar xz -C /tmp
                             sudo mv /tmp/eksctl /usr/local/bin
                         fi
@@ -103,10 +104,10 @@ pipeline {
                     // Wait for deployment rollout
                     sh "kubectl rollout status deployment/myntra-node-app-deployment"
 
-                    // Get LoadBalancer URL
+                    // ✅ Get LoadBalancer URL safely (escaped)
                     sh """
-                        APP_URL=\$(kubectl get svc myntra-node-app-service -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
-                        echo '✅ Your application is live at: http://\$APP_URL'
+                        APP_URL=\\$(kubectl get svc myntra-node-app-service -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+                        echo "✅ Your application is live at: http://\$APP_URL"
                     """
                 }
             }

@@ -61,7 +61,7 @@ pipeline {
         stage('Create EKS Cluster if Not Exists') {
             steps {
                 script {
-                    sh """
+                    sh '''
                         # Install eksctl if not installed
                         if ! command -v eksctl >/dev/null 2>&1; then
                             echo "Installing eksctl..."
@@ -82,7 +82,7 @@ pipeline {
                         else
                             echo "Cluster ${EKS_CLUSTER} already exists"
                         fi
-                    """
+                    '''
                 }
             }
         }
@@ -94,7 +94,7 @@ pipeline {
                     sh "aws eks update-kubeconfig --name ${EKS_CLUSTER} --region ${AWS_REGION}"
 
                     // Update image in deployment file
-                    sh """
+                    sh '''
                         sed -i 's|image: .*|image: ${DOCKER_HUB_USER}/${IMAGE_NAME}:${BUILD_NUMBER}|' nodejsapp.yaml
                     """
 
@@ -105,7 +105,7 @@ pipeline {
                     sh "kubectl rollout status deployment/myntra-node-app-deployment"
 
                     // ✅ Get LoadBalancer URL safely (escaped)
-                    sh """
+                    sh '''
                         APP_URL=\\$(kubectl get svc myntra-node-app-service -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
                         echo "✅ Your application is live at: http://\$APP_URL"
                     """

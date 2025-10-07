@@ -1,20 +1,20 @@
-# Use official Node.js 18 image as base
+# Use Node.js 18 as the base image
 FROM node:18
 
-# Set working directory inside container
+# Set the working directory inside the container
 WORKDIR /usr/src/app
 
-# Copy package.json and package-lock.json
-COPY package*.json ./
+# Copy the package.json and package-lock.json from the Myntra/ directory
+COPY Myntra/package*.json ./
 
 # Install app dependencies
 RUN npm install
 
-# Copy the rest of the application code
-COPY . .
+# Copy the rest of the application code from the Myntra/ directory
+COPY Myntra/ ./
 
 # Expose the port your app runs on
 EXPOSE 3000
 
-# Command to run the application
+# Command to run your app
 CMD ["npm", "start"]

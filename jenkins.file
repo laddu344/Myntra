@@ -10,7 +10,7 @@ pipeline {
         DOCKER_CREDENTIALS_ID = 'docker-creds'
         IMAGE_NAME = 'myntra-node-app'
         AWS_REGION = 'eu-north-1'
-        EKS_CLUSTER = 'prasad-cluster'
+        EKS_CLUSTER = 'honey-cluster'
     }
 
     stages {

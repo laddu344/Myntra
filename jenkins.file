@@ -11,9 +11,41 @@ pipeline {
         IMAGE_NAME = 'myntra-node-app'
         AWS_REGION = 'eu-north-1'
         EKS_CLUSTER = 'honey-cluster'
+        HOME_BIN = '/var/lib/jenkins/bin'
+        PATH = "/var/lib/jenkins/bin:/var/lib/jenkins/tools/jenkins.plugins.nodejs.tools.NodeJSInstallation/node23/bin:$PATH"
     }
 
     stages {
+
+        stage('Setup Tools') {
+            steps {
+                script {
+                    sh '''
+                        mkdir -p $HOME_BIN
+
+                        # Install eksctl if not present
+                        if [ ! -f "$HOME_BIN/eksctl" ]; then
+                            echo "Installing eksctl..."
+                            curl --silent --location "https://github.com/weaveworks/eksctl/releases/latest/download/eksctl_$(uname -s)_amd64.tar.gz" | tar xz -C /tmp
+                            mv /tmp/eksctl $HOME_BIN/
+                            chmod +x $HOME_BIN/eksctl
+                        fi
+
+                        # Install kubectl if not present
+                        if [ ! -f "$HOME_BIN/kubectl" ]; then
+                            echo "Installing kubectl..."
+                            curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+                            chmod +x kubectl
+                            mv kubectl $HOME_BIN/
+                        fi
+
+                        export PATH=$HOME_BIN:$PATH
+                        eksctl version
+                        kubectl version --client
+                    '''
+                }
+            }
+        }
 
         stage('Clone Code from GitHub') {
             steps {
@@ -64,20 +96,9 @@ pipeline {
             steps {
                 script {
                     sh '''
-                        # Install eksctl if not installed
-                        if ! command -v eksctl >/dev/null 2>&1; then
-                            echo "Installing eksctl..."
-                            curl --silent --location "https://github.com/weaveworks/eksctl/releases/latest/download/eksctl_$(uname -s)_amd64.tar.gz" | tar xz -C /tmp
-                            mkdir -p $HOME/bin
-                            mv /tmp/eksctl $HOME/bin/
-                            chmod +x $HOME/bin/eksctl
-                            echo "eksctl installed successfully."
-                        fi
-                        export PATH=$HOME/bin:$PATH
-
-                        # Check if cluster exists, else create with exactly 2 nodes
+                        export PATH=$HOME_BIN:$PATH
                         if ! eksctl get cluster --name ${EKS_CLUSTER} --region ${AWS_REGION} >/dev/null 2>&1; then
-                            echo "Cluster not found. Creating EKS cluster ${EKS_CLUSTER} with 2 nodes..."
+                            echo "Cluster not found. Creating EKS cluster..."
                             eksctl create cluster \
                                 --name ${EKS_CLUSTER} \
                                 --region ${AWS_REGION} \
@@ -97,41 +118,39 @@ pipeline {
             steps {
                 script {
                     sh '''
-                        # Install kubectl if not installed
-                        if [ ! -f "$HOME/bin/kubectl" ]; then
-                            echo "Installing kubectl..."
-                            curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
-                            chmod +x kubectl
-                            mkdir -p $HOME/bin
-                            mv kubectl $HOME/bin/
-                        fi
-                        export PATH=$HOME/bin:$PATH
-
-                        # Configure kubeconfig
+                        export PATH=$HOME_BIN:$PATH
                         aws eks update-kubeconfig --name ${EKS_CLUSTER} --region ${AWS_REGION}
 
                         # Ensure deployment.yaml exists
                         if [ ! -f deployment.yaml ]; then
-                            echo "❌ deployment.yaml not found in workspace!"
+                            echo "❌ deployment.yaml not found!"
                             exit 1
                         fi
 
                         # Update Docker image in deployment.yaml
                         sed -i "s|image: .*|image: ${DOCKER_HUB_USER}/${IMAGE_NAME}:${BUILD_NUMBER}|" deployment.yaml
 
-                        # Apply Kubernetes manifests
+                        # Apply manifests
                         kubectl apply -f deployment.yaml
 
                         # Wait for deployment rollout
-                        kubectl rollout status deployment/myntra-node-app-deployment
-
-                        # Get LoadBalancer URL
-                        APP_URL=$(kubectl get svc myntra-node-app-service -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
-                        if [ -z "$APP_URL" ]; then
-                            echo "⚠️ LoadBalancer URL not ready. Check AWS console."
-                        else
-                            echo "✅ Application is live at: http://$APP_URL"
+                        if ! kubectl rollout status deployment/myntra-node-app-deployment --timeout=5m; then
+                            echo "⚠️ Deployment failed, fetching pod logs..."
+                            kubectl describe pods
+                            kubectl logs $(kubectl get pods -l app=myntra-node-app -o jsonpath='{.items[0].metadata.name}')
+                            exit 1
                         fi
+
+                        # Retry loop for LoadBalancer URL
+                        for i in {1..10}; do
+                            APP_URL=$(kubectl get svc myntra-node-app-service -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+                            if [ ! -z "$APP_URL" ]; then
+                                echo "✅ Application is live at: http://$APP_URL"
+                                break
+                            fi
+                            echo "Waiting for LoadBalancer..."
+                            sleep 15
+                        done
                     '''
                 }
             }
@@ -140,10 +159,10 @@ pipeline {
 
     post {
         success {
-            echo "✅ Deployment successful! Check the EKS LoadBalancer URL above."
+            echo "✅ Deployment successful!"
         }
         failure {
-            echo "❌ Deployment failed. Please check the Jenkins logs."
+            echo "❌ Deployment failed! Check Jenkins logs for details."
         }
     }
 }

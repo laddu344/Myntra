@@ -1,0 +1,14 @@
+{
+  "name": "myntra-app",
+  "version": "1.0.0",
+  "description": "Myntra Node.js app",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "author": "vara prasad",
+  "license": "ISC",
+  "dependencies": {
+    "express": "^4.18.2"
+  }
+}

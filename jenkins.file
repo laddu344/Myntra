@@ -74,9 +74,20 @@ pipeline {
                             echo "eksctl installed successfully."
                         fi
 
-                        # Check if cluster exists, else create with exactly 2 nodes
+                        # Install kubectl if not installed
+                        if ! command -v kubectl >/dev/null 2>&1; then
+                            echo "Installing kubectl..."
+                            curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+                            chmod +x kubectl
+                            mkdir -p $HOME/bin
+                            mv kubectl $HOME/bin/
+                            export PATH=$PATH:$HOME/bin
+                            echo "kubectl installed successfully."
+                        fi
+
+                        # Check if cluster exists, else create
                         if ! eksctl get cluster --name ${EKS_CLUSTER} --region ${AWS_REGION} >/dev/null 2>&1; then
-                            echo "Cluster not found. Creating EKS cluster ${EKS_CLUSTER} with 2 nodes..."
+                            echo "Cluster not found. Creating EKS cluster ${EKS_CLUSTER}..."
                             eksctl create cluster \
                                 --name ${EKS_CLUSTER} \
                                 --region ${AWS_REGION} \
@@ -95,25 +106,34 @@ pipeline {
         stage('Deploy to EKS Cluster') {
             steps {
                 script {
-                    // Configure kubectl
                     sh "aws eks update-kubeconfig --name ${EKS_CLUSTER} --region ${AWS_REGION}"
 
-                    // Update image in deployment YAML
-                    sh '''
-                        sed -i "s|image: .*|image: ${DOCKER_HUB_USER}/${IMAGE_NAME}:${BUILD_NUMBER}|" deployment.yaml
-                    '''
+                    // Ensure deployment.yaml exists
+                    def deployYaml = 'deployment.yaml'
+                    if (!fileExists(deployYaml)) {
+                        error("❌ deployment.yaml not found in workspace!")
+                    }
 
-                    // Apply Kubernetes manifests
-                    sh "kubectl apply -f deployment.yaml"
+                    // Update image in deployment.yaml
+                    sh """
+                        sed -i "s|image: .*|image: ${DOCKER_HUB_USER}/${IMAGE_NAME}:${BUILD_NUMBER}|" ${deployYaml}
+                    """
+
+                    // Apply manifests
+                    sh "kubectl apply -f ${deployYaml}"
 
                     // Wait for deployment rollout
                     sh "kubectl rollout status deployment/myntra-node-app-deployment"
 
-                    // ✅ Get LoadBalancer URL
-                    sh '''
-                        APP_URL=$(kubectl get svc myntra-node-app-service -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
-                        echo "✅ Your application is live at: http://$APP_URL"
-                    '''
+                    // Get LoadBalancer URL safely
+                    sh """
+                        APP_URL=\$(kubectl get svc myntra-node-app-service -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+                        if [ -z "\$APP_URL" ]; then
+                            echo "⚠️ LoadBalancer URL not yet available. Check manually in AWS console."
+                        else
+                            echo "✅ Your application is live at: http://\$APP_URL"
+                        fi
+                    """
                 }
             }
         }
@@ -124,7 +144,7 @@ pipeline {
             echo "✅ Deployment successful! Check the EKS LoadBalancer URL above."
         }
         failure {
-            echo "❌ Deployment failed. Please check the Jenkins logs."
+            echo "❌ Deployment failed. Check Jenkins logs and workspace for details."
         }
     }
 }

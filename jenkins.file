@@ -100,11 +100,11 @@ pipeline {
 
                     // Update image in deployment YAML
                     sh '''
-                        sed -i "s|image: .*|image: ${DOCKER_HUB_USER}/${IMAGE_NAME}:${BUILD_NUMBER}|" nodejsapp.yaml
+                        sed -i "s|image: .*|image: ${DOCKER_HUB_USER}/${IMAGE_NAME}:${BUILD_NUMBER}|" deplyment.yaml
                     '''
 
                     // Apply Kubernetes manifests
-                    sh "kubectl apply -f nodejsapp.yaml"
+                    sh "kubectl apply -f deployment.yaml"
 
                     // Wait for deployment rollout
                     sh "kubectl rollout status deployment/myntra-node-app-deployment"

@@ -2,7 +2,7 @@ pipeline {
     agent any
 
     tools {
-        nodejs "node23"      
+        nodejs "node23"      // Make sure NodeJS tool is configured in Jenkins
     }
 
     environment {
@@ -20,7 +20,7 @@ pipeline {
                 checkout([$class: 'GitSCM', 
                     branches: [[name: '*/main']], 
                     userRemoteConfigs: [[
-                        url: 'https://github.com/varaprasadrenati/Myntra.git',
+                        url: 'https://github.com/laddu344/Myntra.git',
                         credentialsId: 'GITHUB_CREDENTIALS'
                     ]]
                 ])
@@ -46,8 +46,12 @@ pipeline {
             steps {
                 script {
                     def imageTag = "${DOCKER_HUB_USER}/${IMAGE_NAME}:${BUILD_NUMBER}"
-                    withCredentials([string(credentialsId: "${DOCKER_CREDENTIALS_ID}", variable: 'DOCKER_PASS')]) {
-                        sh "echo $DOCKER_PASS | docker login -u ${DOCKER_HUB_USER} --password-stdin"
+                    withCredentials([usernamePassword(
+                        credentialsId: "${DOCKER_CREDENTIALS_ID}",
+                        usernameVariable: 'DOCKER_USER',
+                        passwordVariable: 'DOCKER_PASS'
+                    )]) {
+                        sh "echo $DOCKER_PASS | docker login -u $DOCKER_USER --password-stdin"
                     }
                     sh "docker push ${imageTag}"
                 }
@@ -57,21 +61,21 @@ pipeline {
         stage('Deploy to EKS Cluster') {
             steps {
                 script {
-                    // Connect to EKS cluster
+                    // Use EC2 IAM role; no explicit AWS credentials
                     sh "aws eks update-kubeconfig --name ${EKS_CLUSTER} --region ${AWS_REGION}"
 
-                    // Replace image dynamically in nodejsapp.yaml
+                    // Update deployment image dynamically
                     sh """
                         sed -i 's|image: .*|image: ${DOCKER_HUB_USER}/${IMAGE_NAME}:${BUILD_NUMBER}|' nodejsapp.yaml
                     """
 
-                    // Apply deployment and service
+                    // Apply Kubernetes deployment and service
                     sh "kubectl apply -f nodejsapp.yaml"
 
-                    // Wait until deployment is ready
+                    // Wait for deployment to be ready
                     sh "kubectl rollout status deployment/myntra-node-app-deployment"
 
-                    // Fetch public LoadBalancer URL
+                    // Fetch LoadBalancer URL
                     sh """
                         APP_URL=\$(kubectl get svc myntra-node-app-service -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
                         echo 'Your application is live at: http://\$APP_URL'

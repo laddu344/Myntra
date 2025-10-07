@@ -1,0 +1,32 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: myntra-node-app-deployment
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: myntra-node-app
+  template:
+    metadata:
+      labels:
+        app: myntra-node-app
+    spec:
+      containers:
+      - name: myntra-node-app
+        image: varaprasadrenati/myntra-node-app:latest
+        ports:
+        - containerPort: 3000
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: myntra-node-app-service
+spec:
+  type: LoadBalancer
+  selector:
+    app: myntra-node-app
+  ports:
+  - protocol: TCP
+    port: 80
+    targetPort: 3000

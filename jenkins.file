@@ -2,23 +2,23 @@ pipeline {
     agent any
 
     tools {
-        nodejs "node23"      // Make sure NodeJS tool is configured in Jenkins
+        nodejs "node23" // NodeJS must be configured in Jenkins Global Tool Configuration
     }
 
     environment {
-        DOCKER_HUB_USER = 'varaprasadrenati'       
-        DOCKER_CREDENTIALS_ID = 'docker-creds'     
-        IMAGE_NAME = 'myntra-node-app'             
-        AWS_REGION = 'eu-north-1'                  
-        EKS_CLUSTER = 'prasad-cluster'                      
+        DOCKER_HUB_USER = 'varaprasadrenati'
+        DOCKER_CREDENTIALS_ID = 'docker-creds'
+        IMAGE_NAME = 'myntra-node-app'
+        AWS_REGION = 'eu-north-1'
+        EKS_CLUSTER = 'prasad-cluster'
     }
 
     stages {
 
         stage('Clone Code from GitHub') {
             steps {
-                checkout([$class: 'GitSCM', 
-                    branches: [[name: '*/main']], 
+                checkout([$class: 'GitSCM',
+                    branches: [[name: '*/main']],
                     userRemoteConfigs: [[
                         url: 'https://github.com/laddu344/Myntra.git',
                         credentialsId: 'GITHUB_CREDENTIALS'
@@ -51,7 +51,9 @@ pipeline {
                         usernameVariable: 'DOCKER_USER',
                         passwordVariable: 'DOCKER_PASS'
                     )]) {
-                        sh "echo $DOCKER_PASS | docker login -u $DOCKER_USER --password-stdin"
+                        sh '''
+                            echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin
+                        '''
                     }
                     sh "docker push ${imageTag}"
                 }
@@ -93,10 +95,10 @@ pipeline {
                     // Configure kubectl
                     sh "aws eks update-kubeconfig --name ${EKS_CLUSTER} --region ${AWS_REGION}"
 
-                    // Update image in deployment file
+                    // Update image in deployment YAML
                     sh '''
-                        sed -i 's|image: .*|image: ${DOCKER_HUB_USER}/${IMAGE_NAME}:${BUILD_NUMBER}|' nodejsapp.yaml
-                    """
+                        sed -i "s|image: .*|image: ${DOCKER_HUB_USER}/${IMAGE_NAME}:${BUILD_NUMBER}|" nodejsapp.yaml
+                    '''
 
                     // Apply Kubernetes manifests
                     sh "kubectl apply -f nodejsapp.yaml"
@@ -104,11 +106,11 @@ pipeline {
                     // Wait for deployment rollout
                     sh "kubectl rollout status deployment/myntra-node-app-deployment"
 
-                    // ✅ Get LoadBalancer URL safely (escaped)
+                    // ✅ Get LoadBalancer URL
                     sh '''
-                        APP_URL=\\$(kubectl get svc myntra-node-app-service -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
-                        echo "✅ Your application is live at: http://\$APP_URL"
-                    """
+                        APP_URL=$(kubectl get svc myntra-node-app-service -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+                        echo "✅ Your application is live at: http://$APP_URL"
+                    '''
                 }
             }
         }
@@ -116,10 +118,10 @@ pipeline {
 
     post {
         success {
-            echo "✅ Deployment successful! Check above for your EKS LoadBalancer URL."
+            echo "✅ Deployment successful! Check the URL in logs above."
         }
         failure {
-            echo "❌ Deployment failed. Please check the Jenkins logs for errors."
+            echo "❌ Deployment failed. Please check Jenkins logs."
         }
     }
 }

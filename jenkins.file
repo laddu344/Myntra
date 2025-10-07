@@ -11,41 +11,10 @@ pipeline {
         IMAGE_NAME = 'myntra-node-app'
         AWS_REGION = 'eu-north-1'
         EKS_CLUSTER = 'honey-cluster'
-        HOME_BIN = '/var/lib/jenkins/bin'
-        PATH = "/var/lib/jenkins/bin:/var/lib/jenkins/tools/jenkins.plugins.nodejs.tools.NodeJSInstallation/node23/bin:$PATH"
+        HOME_BIN = "$HOME/bin"
     }
 
     stages {
-
-        stage('Setup Tools') {
-            steps {
-                script {
-                    sh '''
-                        mkdir -p $HOME_BIN
-
-                        # Install eksctl if not present
-                        if [ ! -f "$HOME_BIN/eksctl" ]; then
-                            echo "Installing eksctl..."
-                            curl --silent --location "https://github.com/weaveworks/eksctl/releases/latest/download/eksctl_$(uname -s)_amd64.tar.gz" | tar xz -C /tmp
-                            mv /tmp/eksctl $HOME_BIN/
-                            chmod +x $HOME_BIN/eksctl
-                        fi
-
-                        # Install kubectl if not present
-                        if [ ! -f "$HOME_BIN/kubectl" ]; then
-                            echo "Installing kubectl..."
-                            curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
-                            chmod +x kubectl
-                            mv kubectl $HOME_BIN/
-                        fi
-
-                        export PATH=$HOME_BIN:$PATH
-                        eksctl version
-                        kubectl version --client
-                    '''
-                }
-            }
-        }
 
         stage('Clone Code from GitHub') {
             steps {
@@ -83,11 +52,34 @@ pipeline {
                         usernameVariable: 'DOCKER_USER',
                         passwordVariable: 'DOCKER_PASS'
                     )]) {
-                        sh '''
-                            echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin
-                        '''
+                        sh 'echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin'
                     }
                     sh "docker push ${imageTag}"
+                }
+            }
+        }
+
+        stage('Install eksctl & kubectl') {
+            steps {
+                script {
+                    sh '''
+                    mkdir -p $HOME/bin
+                    export PATH=$HOME/bin:$PATH
+
+                    # Install eksctl
+                    if ! command -v eksctl >/dev/null 2>&1; then
+                        curl --silent --location "https://github.com/weaveworks/eksctl/releases/latest/download/eksctl_$(uname -s)_amd64.tar.gz" | tar xz -C /tmp
+                        mv /tmp/eksctl $HOME/bin/
+                        chmod +x $HOME/bin/eksctl
+                    fi
+
+                    # Install kubectl
+                    if ! command -v kubectl >/dev/null 2>&1; then
+                        curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+                        chmod +x kubectl
+                        mv kubectl $HOME/bin/
+                    fi
+                    '''
                 }
             }
         }
@@ -96,19 +88,20 @@ pipeline {
             steps {
                 script {
                     sh '''
-                        export PATH=$HOME_BIN:$PATH
-                        if ! eksctl get cluster --name ${EKS_CLUSTER} --region ${AWS_REGION} >/dev/null 2>&1; then
-                            echo "Cluster not found. Creating EKS cluster..."
-                            eksctl create cluster \
-                                --name ${EKS_CLUSTER} \
-                                --region ${AWS_REGION} \
-                                --nodegroup-name standard-nodes \
-                                --node-type t3.medium \
-                                --nodes 2 \
-                                --managed
-                        else
-                            echo "Cluster ${EKS_CLUSTER} already exists."
-                        fi
+                    export PATH=$HOME/bin:$PATH
+
+                    if ! eksctl get cluster --name ${EKS_CLUSTER} --region ${AWS_REGION} >/dev/null 2>&1; then
+                        echo "Cluster not found. Creating EKS cluster..."
+                        eksctl create cluster \
+                            --name ${EKS_CLUSTER} \
+                            --region ${AWS_REGION} \
+                            --nodegroup-name standard-nodes \
+                            --node-type t3.medium \
+                            --nodes 2 \
+                            --managed
+                    else
+                        echo "Cluster ${EKS_CLUSTER} already exists."
+                    fi
                     '''
                 }
             }
@@ -118,39 +111,31 @@ pipeline {
             steps {
                 script {
                     sh '''
-                        export PATH=$HOME_BIN:$PATH
-                        aws eks update-kubeconfig --name ${EKS_CLUSTER} --region ${AWS_REGION}
+                    export PATH=$HOME/bin:$PATH
 
-                        # Ensure deployment.yaml exists
-                        if [ ! -f deployment.yaml ]; then
-                            echo "❌ deployment.yaml not found!"
-                            exit 1
-                        fi
+                    # Configure kubeconfig
+                    aws eks update-kubeconfig --name ${EKS_CLUSTER} --region ${AWS_REGION}
 
-                        # Update Docker image in deployment.yaml
-                        sed -i "s|image: .*|image: ${DOCKER_HUB_USER}/${IMAGE_NAME}:${BUILD_NUMBER}|" deployment.yaml
+                    # Ensure deployment.yaml exists
+                    if [ ! -f deployment.yaml ]; then
+                        echo "❌ deployment.yaml not found!"
+                        exit 1
+                    fi
 
-                        # Apply manifests
-                        kubectl apply -f deployment.yaml
+                    # Update Docker image
+                    sed -i "s|image: .*|image: ${DOCKER_HUB_USER}/${IMAGE_NAME}:${BUILD_NUMBER}|" deployment.yaml
 
-                        # Wait for deployment rollout
-                        if ! kubectl rollout status deployment/myntra-node-app-deployment --timeout=5m; then
-                            echo "⚠️ Deployment failed, fetching pod logs..."
-                            kubectl describe pods
-                            kubectl logs $(kubectl get pods -l app=myntra-node-app -o jsonpath='{.items[0].metadata.name}')
-                            exit 1
-                        fi
+                    # Deploy to Kubernetes
+                    kubectl apply -f deployment.yaml
+                    kubectl rollout status deployment/myntra-node-app-deployment
 
-                        # Retry loop for LoadBalancer URL
-                        for i in {1..10}; do
-                            APP_URL=$(kubectl get svc myntra-node-app-service -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
-                            if [ ! -z "$APP_URL" ]; then
-                                echo "✅ Application is live at: http://$APP_URL"
-                                break
-                            fi
-                            echo "Waiting for LoadBalancer..."
-                            sleep 15
-                        done
+                    # Get LoadBalancer URL
+                    APP_URL=$(kubectl get svc myntra-node-app-service -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+                    if [ -z "$APP_URL" ]; then
+                        echo "⚠️ LoadBalancer URL not ready. Check AWS console."
+                    else
+                        echo "✅ Application is live at: http://$APP_URL"
+                    fi
                     '''
                 }
             }
@@ -159,10 +144,10 @@ pipeline {
 
     post {
         success {
-            echo "✅ Deployment successful!"
+            echo "✅ Deployment completed successfully!"
         }
         failure {
-            echo "❌ Deployment failed! Check Jenkins logs for details."
+            echo "❌ Deployment failed. Check the logs above."
         }
     }
 }

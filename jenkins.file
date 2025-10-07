@@ -2,7 +2,7 @@ pipeline {
     agent any
 
     tools {
-        nodejs "node23" // NodeJS tool configured in Jenkins
+        nodejs "node23" 
     }
 
     environment {

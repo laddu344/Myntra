@@ -2,7 +2,7 @@ pipeline {
     agent any
 
     tools {
-        nodejs "node23" // NodeJS must be configured in Jenkins Global Tool Configuration
+        nodejs "node23" // NodeJS tool configured in Jenkins
     }
 
     environment {
@@ -68,7 +68,10 @@ pipeline {
                         if ! command -v eksctl >/dev/null 2>&1; then
                             echo "Installing eksctl..."
                             curl --silent --location "https://github.com/weaveworks/eksctl/releases/latest/download/eksctl_$(uname -s)_amd64.tar.gz" | tar xz -C /tmp
-                            sudo mv /tmp/eksctl /usr/local/bin
+                            mkdir -p $HOME/bin
+                            mv /tmp/eksctl $HOME/bin/
+                            export PATH=$PATH:$HOME/bin
+                            echo "eksctl installed successfully."
                         fi
 
                         # Check if cluster exists, else create with exactly 2 nodes
@@ -82,7 +85,7 @@ pipeline {
                                 --nodes 2 \
                                 --managed
                         else
-                            echo "Cluster ${EKS_CLUSTER} already exists"
+                            echo "Cluster ${EKS_CLUSTER} already exists."
                         fi
                     '''
                 }
@@ -118,10 +121,10 @@ pipeline {
 
     post {
         success {
-            echo "✅ Deployment successful! Check the URL in logs above."
+            echo "✅ Deployment successful! Check the EKS LoadBalancer URL above."
         }
         failure {
-            echo "❌ Deployment failed. Please check Jenkins logs."
+            echo "❌ Deployment failed. Please check the Jenkins logs."
         }
     }
 }

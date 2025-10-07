@@ -100,7 +100,7 @@ pipeline {
 
                     // Update image in deployment YAML
                     sh '''
-                        sed -i "s|image: .*|image: ${DOCKER_HUB_USER}/${IMAGE_NAME}:${BUILD_NUMBER}|" deplyment.yaml
+                        sed -i "s|image: .*|image: ${DOCKER_HUB_USER}/${IMAGE_NAME}:${BUILD_NUMBER}|" deployment.yaml
                     '''
 
                     // Apply Kubernetes manifests

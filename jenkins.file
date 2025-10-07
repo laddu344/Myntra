@@ -58,27 +58,55 @@ pipeline {
             }
         }
 
+        stage('Create EKS Cluster if Not Exists') {
+            steps {
+                script {
+                    sh """
+                        # Install eksctl if not installed
+                        if ! command -v eksctl >/dev/null 2>&1; then
+                            curl --silent --location "https://github.com/weaveworks/eksctl/releases/latest/download/eksctl_$(uname -s)_amd64.tar.gz" | tar xz -C /tmp
+                            sudo mv /tmp/eksctl /usr/local/bin
+                        fi
+
+                        # Check if cluster exists, else create with exactly 2 nodes
+                        if ! eksctl get cluster --name ${EKS_CLUSTER} --region ${AWS_REGION} >/dev/null 2>&1; then
+                            echo "Cluster not found. Creating EKS cluster ${EKS_CLUSTER} with 2 nodes..."
+                            eksctl create cluster \
+                                --name ${EKS_CLUSTER} \
+                                --region ${AWS_REGION} \
+                                --nodegroup-name standard-nodes \
+                                --node-type t3.medium \
+                                --nodes 2 \
+                                --managed
+                        else
+                            echo "Cluster ${EKS_CLUSTER} already exists"
+                        fi
+                    """
+                }
+            }
+        }
+
         stage('Deploy to EKS Cluster') {
             steps {
                 script {
-                    // Use EC2 IAM role; no explicit AWS credentials
+                    // Configure kubectl
                     sh "aws eks update-kubeconfig --name ${EKS_CLUSTER} --region ${AWS_REGION}"
 
-                    // Update deployment image dynamically
+                    // Update image in deployment file
                     sh """
                         sed -i 's|image: .*|image: ${DOCKER_HUB_USER}/${IMAGE_NAME}:${BUILD_NUMBER}|' nodejsapp.yaml
                     """
 
-                    // Apply Kubernetes deployment and service
+                    // Apply Kubernetes manifests
                     sh "kubectl apply -f nodejsapp.yaml"
 
-                    // Wait for deployment to be ready
+                    // Wait for deployment rollout
                     sh "kubectl rollout status deployment/myntra-node-app-deployment"
 
-                    // Fetch LoadBalancer URL
+                    // Get LoadBalancer URL
                     sh """
                         APP_URL=\$(kubectl get svc myntra-node-app-service -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
-                        echo 'Your application is live at: http://\$APP_URL'
+                        echo '✅ Your application is live at: http://\$APP_URL'
                     """
                 }
             }
@@ -87,10 +115,10 @@ pipeline {
 
     post {
         success {
-            echo "✅ Deployment successful! Check above for your EKS URL."
+            echo "✅ Deployment successful! Check above for your EKS LoadBalancer URL."
         }
         failure {
-            echo "❌ Deployment failed. Please check logs."
+            echo "❌ Deployment failed. Please check the Jenkins logs for errors."
         }
     }
 }

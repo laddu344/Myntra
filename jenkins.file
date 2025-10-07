@@ -2,17 +2,9 @@ pipeline {
     agent any
 
     environment {
-        // Node.js and Docker tools installed on Jenkins agent
         NODE_HOME = tool 'node23'
         PATH = "${env.NODE_HOME}/bin:${env.PATH}"
-        
-        // Docker image name
-        DOCKER_IMAGE = "yourdockerhubusername/myntra-app"
-        
-        // AWS Credentials ID in Jenkins
-        AWS_CRED = 'aws-creds'
-        
-        // Kubernetes namespace (optional)
+        DOCKER_IMAGE = "laddu344/myntra-app"    
         K8S_NAMESPACE = 'myntra-app'
     }
 
@@ -23,67 +15,61 @@ pipeline {
             }
         }
 
-        stage('Install Dependencies') {
-            steps {
-                sh 'npm install'
-            }
-        }
-
         stage('Build Docker Image') {
             steps {
-                script {
-                    sh "docker build -t ${DOCKER_IMAGE}:latest ."
-                }
+                echo "Building Docker image from Dockerfile inside repo..."
+                sh "docker build -t ${DOCKER_IMAGE}:latest ."
             }
         }
 
         stage('Push Docker Image') {
             steps {
+                echo "Pushing image to Docker Hub..."
                 withDockerRegistry([credentialsId: 'docker-creds', url: '']) {
                     sh "docker push ${DOCKER_IMAGE}:latest"
                 }
             }
         }
 
-        stage('Install AWS CLI & Kubectl') {
+        stage('Install AWS CLI, kubectl & eksctl') {
             steps {
                 sh '''
-                    curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
-                    unzip awscliv2.zip
-                    sudo ./aws/install
+                    set -e
+                    curl -s "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+                    unzip -o awscliv2.zip
+                    sudo ./aws/install || true
 
                     curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
                     chmod +x kubectl
                     sudo mv kubectl /usr/local/bin/
-                    
+
                     curl --silent --location "https://github.com/weaveworks/eksctl/releases/latest/download/eksctl_$(uname -s)_amd64.tar.gz" | tar xz -C /tmp
                     sudo mv /tmp/eksctl /usr/local/bin
                 '''
             }
         }
 
-        stage('Create/Update EKS Cluster') {
+        stage('Create or Update EKS Cluster') {
             steps {
-                withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: "${AWS_CRED}"]]) {
-                    sh '''
-                        # Check if cluster exists
-                        if ! eksctl get cluster --name myntra-cluster --region us-east-1; then
-                            eksctl create cluster --name myntra-cluster --region us-east-1 --nodegroup-name standard-workers --nodes 2 --nodes-min 1 --nodes-max 3 --managed
-                        fi
-                        
-                        # Update kubeconfig
-                        aws eks --region us-east-1 update-kubeconfig --name myntra-cluster
-                    '''
-                }
+                echo "Checking or creating EKS cluster..."
+                sh '''
+                    if ! eksctl get cluster --name myntra-cluster --region eu-north-1 >/dev/null 2>&1; then
+                        eksctl create cluster --name myntra-cluster --region eu-north-1 --nodegroup-name standard-workers --nodes 2 --nodes-min 2 --nodes-max 2 --managed
+                    else
+                        echo "Cluster already exists — skipping creation."
+                    fi
+
+                    aws eks --region us-east-1 update-kubeconfig --name myntra-cluster
+                '''
             }
         }
 
-        stage('Deploy to EKS') {
+        stage('Deploy Application to EKS') {
             steps {
+                echo "Deploying Myntra app to EKS..."
                 sh '''
                     kubectl create namespace ${K8S_NAMESPACE} || true
-                    
-                    # Create deployment yaml dynamically
+
                     cat <<EOF > deployment.yaml
                     apiVersion: apps/v1
                     kind: Deployment
@@ -128,23 +114,25 @@ pipeline {
 
         stage('Get Application URL') {
             steps {
-                script {
-                    sh '''
-                        echo "Waiting for LoadBalancer IP..."
-                        sleep 60
-                        kubectl get svc myntra-app-service -n ${K8S_NAMESPACE} -o jsonpath='{.status.loadBalancer.ingress[0].hostname}'
-                    '''
-                }
+                echo "Fetching LoadBalancer URL..."
+                sh '''
+                    echo "Waiting for LoadBalancer to become active..."
+                    sleep 60
+                    APP_URL=$(kubectl get svc myntra-app-service -n ${K8S_NAMESPACE} -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+                    echo "============================================="
+                    echo "Application URL: http://$APP_URL"
+                    echo "============================================="
+                '''
             }
         }
     }
-    
+
     post {
         success {
-            echo '✅ Application deployed successfully! Check the URL above.'
+            echo '✅ Deployment completed successfully!'
         }
         failure {
-            echo '❌ Pipeline failed.'
+            echo '❌ Pipeline failed. Please check console output.'
         }
     }
 }

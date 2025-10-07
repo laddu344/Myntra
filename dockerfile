@@ -4,14 +4,14 @@ FROM node:18
 # Set working directory inside container
 WORKDIR /usr/src/app
 
-# Copy package.json and package-lock.json from the subfolder (Myntra)
-COPY Myntra/package*.json ./
+# Copy package.json and package-lock.json
+COPY package*.json ./
 
 # Install app dependencies
 RUN npm install
 
-# Copy the rest of the application code from subfolder
-COPY Myntra/ ./
+# Copy the rest of the application code
+COPY . .
 
 # Expose the port your app runs on
 EXPOSE 3000

@@ -74,7 +74,7 @@ pipeline {
                     // Fetch public LoadBalancer URL
                     sh """
                         APP_URL=\$(kubectl get svc myntra-node-app-service -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
-                        echo '🚀 Your application is live at: http://\$APP_URL'
+                        echo 'Your application is live at: http://\$APP_URL'
                     """
                 }
             }

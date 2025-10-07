@@ -1,10 +1,10 @@
-# Use Node.js 18 LTS
+# Use official Node.js LTS image
 FROM node:18
 
-# Set working directory inside the container
+# Set working directory inside container
 WORKDIR /usr/src/app
 
-# Copy package.json and package-lock.json first (for caching dependencies)
+# Copy package.json and package-lock.json (if exists)
 COPY package*.json ./
 
 # Install dependencies
@@ -16,5 +16,5 @@ COPY . .
 # Expose the port your app listens on
 EXPOSE 3000
 
-# Start the app
-CMD ["node", "index.js"]
+# Start the application
+CMD ["npm", "start"]

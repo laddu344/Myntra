@@ -1,138 +1,92 @@
 pipeline {
     agent any
 
+    tools {
+        nodejs "node23"      
+    }
+
     environment {
-        NODE_HOME = tool 'node23'
-        PATH = "${env.NODE_HOME}/bin:${env.PATH}"
-        DOCKER_IMAGE = "laddu344/myntra-app"    
-        K8S_NAMESPACE = 'myntra-app'
+        DOCKER_HUB_USER = 'varaprasadrenati'       
+        DOCKER_CREDENTIALS_ID = 'docker-creds'     
+        IMAGE_NAME = 'myntra-node-app'             
+        AWS_REGION = 'eu-north-1'                  
+        EKS_CLUSTER = 'prasad-cluster'                      
     }
 
     stages {
-        stage('Checkout Code') {
+
+        stage('Clone Code from GitHub') {
             steps {
-                git branch: 'main', url: 'https://github.com/laddu344/Myntra.git'
+                checkout([$class: 'GitSCM', 
+                    branches: [[name: '*/main']], 
+                    userRemoteConfigs: [[
+                        url: 'https://github.com/varaprasadrenati/Myntra.git',
+                        credentialsId: 'GITHUB_CREDENTIALS'
+                    ]]
+                ])
+            }
+        }
+
+        stage('Install Dependencies') {
+            steps {
+                sh 'npm install'
             }
         }
 
         stage('Build Docker Image') {
             steps {
-                echo "Building Docker image from Dockerfile inside repo..."
-                sh "docker build -t ${DOCKER_IMAGE}:latest ."
-            }
-        }
-
-        stage('Push Docker Image') {
-            steps {
-                echo "Pushing image to Docker Hub..."
-                withDockerRegistry([credentialsId: 'docker-creds', url: '']) {
-                    sh "docker push ${DOCKER_IMAGE}:latest"
+                script {
+                    def imageTag = "${DOCKER_HUB_USER}/${IMAGE_NAME}:${BUILD_NUMBER}"
+                    sh "docker build -t ${imageTag} ."
                 }
             }
         }
 
-        stage('Install AWS CLI, kubectl & eksctl') {
+        stage('Push Image to DockerHub') {
             steps {
-                sh '''
-                    set -e
-                    curl -s "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
-                    unzip -o awscliv2.zip
-                    sudo ./aws/install || true
-
-                    curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
-                    chmod +x kubectl
-                    sudo mv kubectl /usr/local/bin/
-
-                    curl --silent --location "https://github.com/weaveworks/eksctl/releases/latest/download/eksctl_$(uname -s)_amd64.tar.gz" | tar xz -C /tmp
-                    sudo mv /tmp/eksctl /usr/local/bin
-                '''
+                script {
+                    def imageTag = "${DOCKER_HUB_USER}/${IMAGE_NAME}:${BUILD_NUMBER}"
+                    withCredentials([string(credentialsId: "${DOCKER_CREDENTIALS_ID}", variable: 'DOCKER_PASS')]) {
+                        sh "echo $DOCKER_PASS | docker login -u ${DOCKER_HUB_USER} --password-stdin"
+                    }
+                    sh "docker push ${imageTag}"
+                }
             }
         }
 
-        stage('Create or Update EKS Cluster') {
+        stage('Deploy to EKS Cluster') {
             steps {
-                echo "Checking or creating EKS cluster..."
-                sh '''
-                    if ! eksctl get cluster --name myntra-cluster --region eu-north-1 >/dev/null 2>&1; then
-                        eksctl create cluster --name myntra-cluster --region eu-north-1 --nodegroup-name standard-workers --nodes 2 --nodes-min 2 --nodes-max 2 --managed
-                    else
-                        echo "Cluster already exists — skipping creation."
-                    fi
+                script {
+                    // Connect to EKS cluster
+                    sh "aws eks update-kubeconfig --name ${EKS_CLUSTER} --region ${AWS_REGION}"
 
-                    aws eks --region us-east-1 update-kubeconfig --name myntra-cluster
-                '''
-            }
-        }
+                    // Replace image dynamically in nodejsapp.yaml
+                    sh """
+                        sed -i 's|image: .*|image: ${DOCKER_HUB_USER}/${IMAGE_NAME}:${BUILD_NUMBER}|' nodejsapp.yaml
+                    """
 
-        stage('Deploy Application to EKS') {
-            steps {
-                echo "Deploying Myntra app to EKS..."
-                sh '''
-                    kubectl create namespace ${K8S_NAMESPACE} || true
+                    // Apply deployment and service
+                    sh "kubectl apply -f nodejsapp.yaml"
 
-                    cat <<EOF > deployment.yaml
-                    apiVersion: apps/v1
-                    kind: Deployment
-                    metadata:
-                      name: myntra-app
-                      namespace: ${K8S_NAMESPACE}
-                    spec:
-                      replicas: 2
-                      selector:
-                        matchLabels:
-                          app: myntra-app
-                      template:
-                        metadata:
-                          labels:
-                            app: myntra-app
-                        spec:
-                          containers:
-                          - name: myntra-app
-                            image: ${DOCKER_IMAGE}:latest
-                            ports:
-                            - containerPort: 3000
-                    ---
-                    apiVersion: v1
-                    kind: Service
-                    metadata:
-                      name: myntra-app-service
-                      namespace: ${K8S_NAMESPACE}
-                    spec:
-                      type: LoadBalancer
-                      selector:
-                        app: myntra-app
-                      ports:
-                      - protocol: TCP
-                        port: 80
-                        targetPort: 3000
-                    EOF
+                    // Wait until deployment is ready
+                    sh "kubectl rollout status deployment/myntra-node-app-deployment"
 
-                    kubectl apply -f deployment.yaml
-                '''
-            }
-        }
-
-        stage('Get Application URL') {
-            steps {
-                echo "Fetching LoadBalancer URL..."
-                sh '''
-                    echo "Waiting for LoadBalancer to become active..."
-                    sleep 60
-                    APP_URL=$(kubectl get svc myntra-app-service -n ${K8S_NAMESPACE} -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
-                    echo "============================================="
-                    echo "Application URL: http://$APP_URL"
-                    echo "============================================="
-                '''
+                    // Fetch public LoadBalancer URL
+                    sh """
+                        APP_URL=\$(kubectl get svc myntra-node-app-service -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+                        echo '🚀 Your application is live at: http://\$APP_URL'
+                    """
+                }
             }
         }
     }
 
     post {
         success {
-            echo '✅ Deployment completed successfully!'
+            echo "✅ Deployment successful! Check above for your EKS URL."
         }
         failure {
-            echo '❌ Pipeline failed. Please check console output.'
+            echo "❌ Deployment failed. Please check logs."
         }
     }
 }
